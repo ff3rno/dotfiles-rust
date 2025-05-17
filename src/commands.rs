@@ -1,14 +1,13 @@
 use std::fs;
 use std::path::Path;
-use std::collections::HashMap;
+
 use anyhow::{anyhow, Context, Result};
 use walkdir::WalkDir;
 use chrono;
 use std::path::PathBuf;
-use std::collections::HashSet;
 
-use crate::fs_utils::{get_home_dir, get_backup_dir, ensure_parent_dirs};
-use crate::backup::{backup_file, find_backup_by_version, find_latest_backup, find_all_backup_versions};
+use crate::fs_utils::{get_home_dir, get_backup_dir};
+use crate::backup::{backup_file, find_latest_backup, find_all_backup_versions};
 use crate::config::read_config;
 use crate::colorize;
 
@@ -142,317 +141,6 @@ pub fn install_dotfiles(dry_run: bool, force: bool, backup: bool, verbose: bool)
     Ok(())
 }
 
-pub fn restore_backups(file: Option<&str>, version: Option<&str>, dry_run: bool, keep_backups: bool) -> Result<()> {
-    let home_dir = get_home_dir()?;
-    let backup_dir = get_backup_dir()?;
-    let config = read_config()?;
-    let source_dir = Path::new(&config.source_dir);
-
-    if !source_dir.exists() {
-        return Err(anyhow!("Source directory '{}' does not exist", source_dir.display()));
-    }
-
-    if !backup_dir.exists() && !dry_run {
-        fs::create_dir_all(&backup_dir)
-            .with_context(|| format!("Failed to create backup directory {}", backup_dir.display()))?;
-        println!("{} {}", 
-            colorize::info("Created backup directory:"), 
-            colorize::path(backup_dir.display()));
-    }
-
-    if let Some(file_path) = file {
-        let home_file = home_dir.join(file_path);
-        let source_file_path = source_dir.join(file_path);
-
-        if let Some(ver) = version {
-            match find_backup_by_version(file_path, ver, &backup_dir) {
-                Ok(backup_file) => {
-                    println!("{} {} ({} {}) to {}",
-                        colorize::info("Restoring"),
-                        colorize::path(backup_file.strip_prefix(&get_backup_dir()?)?.display()),
-                        colorize::info("version"),
-                        colorize::version(ver),
-                        colorize::path(home_file.strip_prefix(&get_home_dir()?)?.display()));
-
-                    if !dry_run {
-                        ensure_parent_dirs(&home_file, dry_run)?;
-                        fs::copy(&backup_file, &home_file)?;
-                        println!("  {}", colorize::success("Restored successfully"));
-
-                        if !keep_backups {
-                            fs::remove_file(&backup_file)
-                                .with_context(|| format!("Failed to delete backup file {}", backup_file.display()))?;
-                            println!("  {}", colorize::success("Backup deleted"));
-                        }
-                    }
-                },
-                Err(_) => {
-                    if source_file_path.exists() {
-                        println!("{} {} {} {}", 
-                            colorize::warning("No backup version"),
-                            colorize::version(ver),
-                            colorize::warning("found for"),
-                            colorize::path(file_path));
-                        println!("{} {}", 
-                            colorize::info("Using source file from"),
-                            colorize::path(source_file_path.display()));
-                            
-                        if !dry_run {
-                            if home_file.exists() {
-                                backup_file(&home_file, &backup_dir, dry_run)?;
-                                println!("  {} {}", 
-                                    colorize::info("Created backup of existing file at"), 
-                                    colorize::path(home_file.strip_prefix(&get_home_dir()?)?.display()));
-                            }
-                            
-                            ensure_parent_dirs(&home_file, dry_run)?;
-                            fs::copy(&source_file_path, &home_file)?;
-                            println!("  {}", colorize::success("Installed from source"));
-                        }
-                    } else if home_file.exists() {
-                        println!("{} {} {} {}",
-                            colorize::error("No backup version"),
-                            colorize::version(ver),
-                            colorize::error("found for"),
-                            colorize::path(file_path));
-                        println!("{} {}? (yes/no)",
-                            colorize::warning("Do you want to delete the existing file at"),
-                            colorize::path(home_file.strip_prefix(&get_home_dir()?)?.display()));
-
-                        let mut confirmation = String::new();
-                        std::io::stdin().read_line(&mut confirmation)?;
-
-                        if confirmation.trim().to_lowercase() == "yes" {
-                            if !dry_run {
-                                fs::remove_file(&home_file)
-                                    .with_context(|| format!("Failed to delete file {}", home_file.display()))?;
-                                println!("  {}", colorize::success("File deleted"));
-                            } else {
-                                println!("  {} {}",
-                                    colorize::dry_run("[Dry run] Would delete file"),
-                                    colorize::path(home_file.strip_prefix(&get_home_dir()?)?.display()));
-                            }
-                        } else {
-                            println!("  {}", colorize::warning("Deletion canceled"));
-                        }
-                    } else {
-                        println!("{} {} {} {}",
-                            colorize::error("No backup version"),
-                            colorize::version(ver),
-                            colorize::error("found for"),
-                            colorize::path(file_path));
-                        println!("{} {}", 
-                            colorize::error("Source file not found at"), 
-                            colorize::path(source_file_path.display()));
-                        println!("{}", colorize::info("Nothing to restore"));
-                    }
-                }
-            }
-        } else {
-            match find_latest_backup(file_path, &backup_dir) {
-                Ok(latest) => {
-                    println!("{} {} from {}",
-                        colorize::info("Restoring latest backup of"),
-                        colorize::path(file_path),
-                        colorize::path(latest.strip_prefix(&get_backup_dir()?)?.display()));
-
-                    if !dry_run {
-                        ensure_parent_dirs(&home_file, dry_run)?;
-                        fs::copy(&latest, &home_file)?;
-                        println!("  {}", colorize::success("Restored successfully"));
-
-                        if !keep_backups {
-                            fs::remove_file(&latest)
-                                .with_context(|| format!("Failed to delete backup file {}", latest.display()))?;
-                            println!("  {}", colorize::success("Backup deleted"));
-                        }
-                    }
-                },
-                Err(_) => {
-                    if source_file_path.exists() {
-                        println!("{} {}", 
-                            colorize::warning("No backups found for"), 
-                            colorize::path(file_path));
-                        println!("{} {}", 
-                            colorize::info("Using source file from"),
-                            colorize::path(source_file_path.display()));
-                            
-                        if !dry_run {
-                            if home_file.exists() {
-                                backup_file(&home_file, &backup_dir, dry_run)?;
-                                println!("  {} {}", 
-                                    colorize::info("Created backup of existing file at"), 
-                                    colorize::path(home_file.strip_prefix(&get_home_dir()?)?.display()));
-                            }
-                            
-                            ensure_parent_dirs(&home_file, dry_run)?;
-                            fs::copy(&source_file_path, &home_file)?;
-                            println!("  {}", colorize::success("Installed from source"));
-                        }
-                    } else if home_file.exists() {
-                        println!("{} {}", colorize::error("No backups found for"), colorize::path(file_path));
-                        println!("{} {}? (yes/no)",
-                            colorize::warning("Do you want to delete the existing file at"),
-                            colorize::path(home_file.strip_prefix(&get_home_dir()?)?.display()));
-
-                        let mut confirmation = String::new();
-                        std::io::stdin().read_line(&mut confirmation)?;
-
-                        if confirmation.trim().to_lowercase() == "yes" {
-                            if !dry_run {
-                                fs::remove_file(&home_file)
-                                    .with_context(|| format!("Failed to delete file {}", home_file.display()))?;
-                                println!("  {}", colorize::success("File deleted"));
-                            } else {
-                                println!("  {} {}",
-                                    colorize::dry_run("[Dry run] Would delete file"),
-                                    colorize::path(home_file.strip_prefix(&get_home_dir()?)?.display()));
-                            }
-                        } else {
-                            println!("  {}", colorize::warning("Deletion canceled"));
-                        }
-                    } else {
-                        println!("{} {}", 
-                            colorize::warning("No backups found for"), 
-                            colorize::path(file_path));
-                        println!("{} {}", 
-                            colorize::warning("Source file not found at"), 
-                            colorize::path(source_file_path.display()));
-                        println!("{}", colorize::info("Nothing to restore"));
-                    }
-                }
-            }
-        }
-    } else {
-        restore_all_latest_backups(&backup_dir, &home_dir, source_dir, dry_run, keep_backups)?;
-    }
-
-    Ok(())
-}
-
-fn restore_all_latest_backups(backup_dir: &Path, home_dir: &Path, source_dir: &Path, dry_run: bool, keep_backups: bool) -> Result<()> {
-    let mut target_files: HashSet<String> = HashSet::new();
-    if source_dir.exists() {
-        for entry in WalkDir::new(source_dir)
-            .min_depth(1)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-        {
-            if let Ok(relative_path) = entry.path().strip_prefix(source_dir) {
-                 let should_skip = BLACKLIST.iter().any(|pattern| {
-                    relative_path.to_string_lossy().contains(pattern)
-                 });
-                if !should_skip {
-                     if let Some(filename) = relative_path.to_str() {
-                         target_files.insert(filename.to_string());
-                     }
-                }
-            }
-        }
-    }
-
-    let mut file_map: HashMap<String, (u64, PathBuf)> = HashMap::new();
-    if backup_dir.exists() {
-        for entry in WalkDir::new(backup_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-        {
-            let path = entry.path();
-            if let Some(backup_name) = path.file_name() {
-                let backup_name = backup_name.to_string_lossy();
-                if let Some(pos) = backup_name.rfind('.') {
-                    let (filename, ver_str) = backup_name.split_at(pos);
-                    let ver = &ver_str[1..];
-                    if let Ok(timestamp) = ver.parse::<u64>() {
-                        let current_best = file_map.get(filename).map(|(ts, _)| *ts).unwrap_or(0);
-                        if timestamp > current_best {
-                            file_map.insert(filename.to_string(), (timestamp, path.to_path_buf()));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    println!("{}", colorize::header("Restoring or installing target files:"));
-    let mut processed_count = 0;
-    let mut deleted_backup_count = 0;
-
-    for relative_path_str in &target_files {
-        let relative_path = PathBuf::from(relative_path_str);
-        let home_file = home_dir.join(&relative_path);
-
-        if let Some((timestamp, backup_path)) = file_map.get(relative_path_str) {
-            let date_time: String = chrono::DateTime::<chrono::Utc>::from_timestamp(*timestamp as i64, 0)
-                .map(|dt: chrono::DateTime<chrono::Utc>| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                .unwrap_or_else(|| timestamp.to_string());
-
-            println!("  {} {} ({} {}) to {}",
-                     colorize::info("Restoring"),
-                     colorize::path(relative_path.display()),
-                     colorize::info("from backup"),
-                     colorize::version(date_time),
-                     colorize::path(home_file.strip_prefix(home_dir).unwrap_or(&home_file).display()));
-
-            if !dry_run {
-                ensure_parent_dirs(&home_file, dry_run)?;
-                fs::copy(backup_path, &home_file)
-                    .with_context(|| format!("Failed to restore {} to {}",
-                                             backup_path.display(),
-                                             home_file.display()))?;
-                processed_count += 1;
-
-                if !keep_backups {
-                    fs::remove_file(backup_path)
-                        .with_context(|| format!("Failed to delete backup file {}", backup_path.display()))?;
-                    deleted_backup_count += 1;
-                }
-            } else {
-                 println!("  {} {}",
-                    colorize::dry_run("[Dry run] Would restore from backup:"),
-                    colorize::path(relative_path.display()));
-            }
-        } else {
-            let source_file_path = source_dir.join(&relative_path);
-
-             println!("  {} {} from source {}",
-                    colorize::info("Installing"),
-                    colorize::path(relative_path.display()),
-                    colorize::path(source_file_path.strip_prefix(source_dir).unwrap_or(&source_file_path).display()));
-
-            if !dry_run {
-                ensure_parent_dirs(&home_file, dry_run)?;
-                fs::copy(&source_file_path, &home_file)
-                    .with_context(|| format!("Failed to copy {} to {}", source_file_path.display(), home_file.display()))?;
-                processed_count += 1;
-            } else {
-                println!("  {} {}",
-                    colorize::dry_run("[Dry run] Would install from source:"),
-                    colorize::path(relative_path.display()));
-            }
-        }
-    }
-
-    if dry_run {
-        println!("{}", colorize::dry_run("Dry run - no target files were actually processed"));
-    } else {
-        println!("{} {} {}",
-            colorize::success("Successfully processed"),
-            colorize::highlight(processed_count),
-            colorize::success("target files"));
-        if !keep_backups && deleted_backup_count > 0 {
-            println!("{} {} {}",
-                colorize::info("Deleted"),
-                colorize::highlight(deleted_backup_count),
-                colorize::info("backup files"));
-        }
-    }
-
-    Ok(())
-}
-
 pub fn list_backups(file: Option<&str>) -> Result<()> {
     let backup_dir: PathBuf = get_backup_dir()?;
 
@@ -574,11 +262,8 @@ pub fn status_dotfiles(verbose: bool) -> Result<()> {
     let mut modified_count = 0;
     let mut missing_count = 0;
 
-    for entry in WalkDir::new(source_dir)
-        .min_depth(1)
-        .into_iter()
+    for entry in fs::read_dir(source_dir)?
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
     {
         let source_path = entry.path();
         let relative_path = source_path.strip_prefix(source_dir)?;
@@ -593,90 +278,283 @@ pub fn status_dotfiles(verbose: bool) -> Result<()> {
 
         total_count += 1;
         let target_path = home_dir.join(relative_path);
-        
-        if !target_path.exists() {
-            println!("  {} {} {}", 
-                colorize::error("✗"), 
-                colorize::path(relative_path.display()),
-                colorize::error("Not installed")
-            );
-            missing_count += 1;
-        } else {
-            let files_identical = match (fs::read(source_path), fs::read(&target_path)) {
-                (Ok(source_content), Ok(target_content)) => source_content == target_content,
-                _ => false
-            };
 
-            if files_identical {
+        if source_path.is_file() {
+            if !target_path.exists() {
                 println!("  {} {} {}", 
-                    colorize::success("✓"), 
+                    colorize::error("✗"), 
                     colorize::path(relative_path.display()),
-                    colorize::success("Installed")
+                    colorize::error("Not installed")
                 );
-                installed_count += 1;
+                missing_count += 1;
             } else {
-                modified_count += 1;
-                
-                println!("  {} {} {}", 
-                    colorize::warning("!"), 
-                    colorize::path(relative_path.display()),
-                    colorize::warning("Modified")
-                );
-                
-                if verbose {
-                    if let (Ok(source_content), Ok(target_content)) = (
-                        fs::read_to_string(source_path),
-                        fs::read_to_string(&target_path)
-                    ) {
-                        // Show a simple diff summary
-                        let source_lines: Vec<&str> = source_content.lines().collect();
-                        let target_lines: Vec<&str> = target_content.lines().collect();
-                        
-                        println!("    {} {} lines, {} {} lines", 
-                            colorize::info("Source:"), 
-                            source_lines.len(),
-                            colorize::info("Target:"), 
-                            target_lines.len()
-                        );
-                        
-                        // Highlight first few differences
-                        let mut diff_count = 0;
-                        let max_diffs = 3;
-                        let max_line_len = 60;
-                        
-                        for i in 0..std::cmp::min(source_lines.len(), target_lines.len()) {
-                            if source_lines[i] != target_lines[i] && diff_count < max_diffs {
-                                diff_count += 1;
-                                
-                                let source_snippet = if source_lines[i].len() > max_line_len {
-                                    format!("{}...", &source_lines[i][0..max_line_len])
-                                } else {
-                                    source_lines[i].to_string()
-                                };
-                                
-                                let target_snippet = if target_lines[i].len() > max_line_len {
-                                    format!("{}...", &target_lines[i][0..max_line_len])
-                                } else {
-                                    target_lines[i].to_string()
-                                };
-                                
-                                println!("    Line {}: ", i + 1);
-                                println!("      Source: {}", source_snippet);
-                                println!("      Target: {}", target_snippet);
+                let files_identical = match (fs::read(&source_path), fs::read(&target_path)) {
+                    (Ok(source_content), Ok(target_content)) => source_content == target_content,
+                    _ => false
+                };
+
+                if files_identical {
+                    println!("  {} {} {}", 
+                        colorize::success("✓"), 
+                        colorize::path(relative_path.display()),
+                        colorize::success("Installed")
+                    );
+                    installed_count += 1;
+                } else {
+                    modified_count += 1;
+                    
+                    println!("  {} {} {}", 
+                        colorize::warning("!"), 
+                        colorize::path(relative_path.display()),
+                        colorize::warning("Modified")
+                    );
+                    
+                    if verbose {
+                        if let (Ok(source_content), Ok(target_content)) = (
+                            fs::read_to_string(&source_path),
+                            fs::read_to_string(&target_path)
+                        ) {
+                            let source_lines: Vec<&str> = source_content.lines().collect();
+                            let target_lines: Vec<&str> = target_content.lines().collect();
+                            
+                            println!("    {} {} lines, {} {} lines", 
+                                colorize::info("Source:"), 
+                                source_lines.len(),
+                                colorize::info("Target:"), 
+                                target_lines.len()
+                            );
+                            
+                            let mut diff_count = 0;
+                            let max_diffs = 3;
+                            let max_line_len = 60;
+                            
+                            for i in 0..std::cmp::min(source_lines.len(), target_lines.len()) {
+                                if source_lines[i] != target_lines[i] && diff_count < max_diffs {
+                                    diff_count += 1;
+                                    
+                                    let source_snippet = if source_lines[i].len() > max_line_len {
+                                        format!("{}...", &source_lines[i][0..max_line_len])
+                                    } else {
+                                        source_lines[i].to_string()
+                                    };
+                                    
+                                    let target_snippet = if target_lines[i].len() > max_line_len {
+                                        format!("{}...", &target_lines[i][0..max_line_len])
+                                    } else {
+                                        target_lines[i].to_string()
+                                    };
+                                    
+                                    println!("    Line {}: ", i + 1);
+                                    println!("      Source: {}", source_snippet);
+                                    println!("      Target: {}", target_snippet);
+                                }
                             }
                         }
+                        println!();
                     }
-                    println!();
+                }
+            }
+        } else if source_path.is_dir() {
+             if target_path.exists() && target_path.is_dir() {
+                 println!("  {} {} {}", 
+                     colorize::success("✓"), 
+                     colorize::path(relative_path.display()),
+                     colorize::success("Installed")
+                 );
+                 installed_count += 1;
+             } else {
+                 println!("  {} {} {}", 
+                     colorize::error("✗"), 
+                     colorize::path(relative_path.display()),
+                     colorize::error("Not installed")
+                 );
+                 missing_count += 1;
+             }
+        }
+    }
+
+    println!("\n{}", colorize::header("Summary:"));
+    println!("  {} {}", colorize::info("Total files and directories:"), colorize::highlight(total_count));
+    println!("  {} {}", colorize::success("Installed:"), colorize::highlight(installed_count));
+    println!("  {} {}", colorize::warning("Modified:"), colorize::highlight(modified_count));
+    println!("  {} {}", colorize::error("Not installed:"), colorize::highlight(missing_count));
+
+    Ok(())
+}
+
+pub fn uninstall_dotfiles(dry_run: bool, force: bool, verbose: bool) -> Result<()> {
+    let config = read_config()?;
+    let source_dir = &config.source_dir;
+
+    let home_dir = get_home_dir()?;
+    let source_dir = Path::new(source_dir);
+    let backup_dir = get_backup_dir()?;
+
+    if !source_dir.exists() {
+        return Err(anyhow!("Source directory '{}' does not exist", source_dir.display()));
+    }
+
+    if verbose {
+        println!("{} {}",
+            colorize::info("Uninstalling dotfiles from"),
+            colorize::path(home_dir.strip_prefix(&get_home_dir()?)?.display()));
+        if dry_run {
+            println!("{}", colorize::dry_run("Dry run mode: no files will be modified"));
+        }
+    } else {
+        println!("{}", colorize::header("Uninstalling dotfiles..."));
+    }
+
+    let mut success_count = 0;
+    let mut restored_count = 0;
+    let mut skipped_count = 0;
+
+    for entry in WalkDir::new(source_dir)
+        .min_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let source_path = entry.path();
+
+        if !source_path.is_file() {
+            continue;
+        }
+
+        let relative_path = source_path.strip_prefix(source_dir)?;
+
+        let should_skip = BLACKLIST.iter().any(|pattern| {
+            relative_path.to_string_lossy().contains(pattern)
+        });
+
+        if should_skip {
+            if verbose {
+                println!("  {} {}", colorize::warning("Skipping blacklisted path:"), colorize::path(relative_path.display()));
+            }
+            skipped_count += 1;
+            continue;
+        }
+
+        let target_path = home_dir.join(relative_path);
+        let rel_path_str = relative_path.to_string_lossy();
+
+        if verbose {
+            println!("  {} {}", colorize::info("Processing:"), colorize::path(relative_path.display()));
+        }
+
+        if !target_path.exists() {
+            if verbose {
+                println!("  {} {}", 
+                    colorize::warning("Target file does not exist:"), 
+                    colorize::path(target_path.strip_prefix(&get_home_dir()?)?.display()));
+            } else {
+                println!("  {} {}", 
+                    colorize::warning("Skipped:"), 
+                    colorize::path(relative_path.display()));
+            }
+            skipped_count += 1;
+            continue;
+        }
+
+        // Check if the target is identical to the source
+        let files_identical = match (fs::read(&source_path), fs::read(&target_path)) {
+            (Ok(source_content), Ok(target_content)) => source_content == target_content,
+            _ => false
+        };
+
+        if !files_identical && !force {
+            if verbose {
+                println!("  {} {} (use --force to remove)",
+                    colorize::warning("Target file is modified, skipping:"),
+                    colorize::path(relative_path.display()));
+            } else {
+                println!("  {} {} (use --force to remove)",
+                    colorize::warning("Skipped (modified):"),
+                    colorize::path(relative_path.display()));
+            }
+            skipped_count += 1;
+            continue;
+        }
+
+        // Try to find a backup to restore
+        match find_latest_backup(&rel_path_str, &backup_dir) {
+            Ok(backup_path) => {
+                if verbose {
+                    println!("  {} {} with backup",
+                        colorize::info("Replacing"),
+                        colorize::path(relative_path.display()));
+                } else {
+                    println!("  {} {} (restoring backup)",
+                        colorize::info("Uninstalling:"),
+                        colorize::path(relative_path.display()));
+                }
+
+                if !dry_run {
+                    fs::copy(&backup_path, &target_path)
+                        .with_context(|| format!("Failed to restore backup {} to {}", 
+                            backup_path.display(), target_path.display()))?;
+                    restored_count += 1;
+
+                    fs::remove_file(&backup_path)
+                        .with_context(|| format!("Failed to delete backup file {}", backup_path.display()))?;
+                        
+                    if verbose {
+                        println!("  {}", colorize::success("Backup restored and cleaned up"));
+                    }
+                } else if verbose {
+                    println!("  {} {}",
+                        colorize::dry_run("[Dry run] Would restore from backup:"),
+                        colorize::path(backup_path.strip_prefix(&backup_dir)?.display()));
+                }
+            },
+            Err(_) => {
+                if verbose {
+                    println!("  {} {}", 
+                        colorize::info("Removing"),
+                        colorize::path(relative_path.display()));
+                } else {
+                    println!("  {} {}",
+                        colorize::info("Uninstalling:"),
+                        colorize::path(relative_path.display()));
+                }
+
+                if !dry_run {
+                    fs::remove_file(&target_path)
+                        .with_context(|| format!("Failed to remove file {}", target_path.display()))?;
+                    success_count += 1;
+                    
+                    if verbose {
+                        println!("  {}", colorize::success("Removed successfully"));
+                    }
+                } else if verbose {
+                    println!("  {} {}",
+                        colorize::dry_run("[Dry run] Would remove:"),
+                        colorize::path(target_path.strip_prefix(&home_dir)?.display()));
                 }
             }
         }
     }
 
-    println!("\n{}", colorize::header("Summary:"));
-    println!("  {} {}", colorize::info("Total files:"), colorize::highlight(total_count));
-    println!("  {} {}", colorize::success("Installed:"), colorize::highlight(installed_count));
-    println!("  {} {}", colorize::warning("Modified:"), colorize::highlight(modified_count));
-    println!("  {} {}", colorize::error("Not installed:"), colorize::highlight(missing_count));
+    if dry_run {
+        println!("{}", colorize::dry_run("Dry run - no files were actually modified"));
+    } else {
+        println!("\n{}", colorize::header("Summary:"));
+        if restored_count > 0 {
+            println!("  {} {}", 
+                colorize::success("Files restored from backup:"), 
+                colorize::highlight(restored_count));
+        }
+        if success_count > 0 {
+            println!("  {} {}", 
+                colorize::success("Files removed:"), 
+                colorize::highlight(success_count));
+        }
+        if skipped_count > 0 {
+            println!("  {} {}", 
+                colorize::warning("Files skipped:"), 
+                colorize::highlight(skipped_count));
+        }
+        println!("{}", colorize::success("Uninstallation complete."));
+    }
 
     Ok(())
 }

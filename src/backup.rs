@@ -34,6 +34,7 @@ pub fn backup_file(file_path: &Path, backup_dir: &Path, dry_run: bool) -> Result
     Ok(())
 }
 
+#[cfg(test)]
 pub fn find_backup_by_version(file_path: &str, version: &str, backup_dir: &Path) -> Result<PathBuf> {
     let filename = Path::new(file_path).file_name()
         .ok_or_else(|| anyhow!("Invalid file path"))?

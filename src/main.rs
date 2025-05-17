@@ -10,7 +10,7 @@ mod tests;
 use anyhow::Result;
 use clap::Parser;
 use crate::cli::{Cli, Args};
-use crate::commands::{restore_backups, list_backups, clear_backups};
+use crate::commands::{list_backups, clear_backups, uninstall_dotfiles};
 use crate::config::initialize_config;
 use colored;
 
@@ -22,19 +22,19 @@ fn main() -> Result<()> {
         Args::Install { dry_run, force, backup, verbose } => {
             commands::install_dotfiles(dry_run, force, backup, verbose)
         },
+        Args::Uninstall { dry_run, force, verbose } => {
+            uninstall_dotfiles(dry_run, force, verbose)
+        },
         Args::Init { source_dir } => {
             println!("{} {}", colorize::info("Initializing config with source directory:"), colorize::path(&source_dir));
             initialize_config(&source_dir)?;
             println!("{} {}", colorize::success("Configuration file created at"), colorize::path("~/.dotfiles-rustrc.yaml"));
             Ok(())
         },
-        Args::Restore { file, version, dry_run, keep_backups } => {
-            restore_backups(file.as_deref(), version.as_deref(), dry_run, keep_backups)
-        },
-        Args::List { file } => {
+        Args::Backups { file } => {
             list_backups(file.as_deref())
         },
-        Args::ClearBackups { force } => {
+        Args::Reset { force } => {
             clear_backups(force)
         },
         Args::Status { verbose } => {

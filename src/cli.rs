@@ -28,6 +28,21 @@ pub enum Args {
         verbose: bool,
     },
     
+    /// Uninstall dotfiles, restoring from backups when available
+    Uninstall {
+        /// Perform a dry run without making any changes
+        #[arg(short, long)]
+        dry_run: bool,
+        
+        /// Force removal even if files were modified
+        #[arg(short, long)]
+        force: bool,
+        
+        /// Display verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+    
     /// Initialize configuration file with source directory
     Init {
         /// Source directory containing dotfiles
@@ -35,34 +50,15 @@ pub enum Args {
         source_dir: String,
     },
     
-    /// Restore files from backups
-    Restore {
-        /// Specific file to restore (if not specified, all files will be restored)
-        #[arg(short, long)]
-        file: Option<String>,
-        
-        /// Specific backup version to restore (timestamp)
-        #[arg(short, long)]
-        version: Option<String>,
-        
-        /// Perform a dry run without making any changes
-        #[arg(short, long)]
-        dry_run: bool,
-        
-        /// Keep backup files after successful restore (default: false)
-        #[arg(short, long, default_value = "false")]
-        keep_backups: bool,
-    },
-    
     /// List available backups
-    List {
+    Backups {
         /// Specific file to list backups for
         #[arg(short, long)]
         file: Option<String>,
     },
     
     /// Clear all backup files
-    ClearBackups {
+    Reset {
         /// Skip confirmation prompt
         #[arg(short, long)]
         force: bool,

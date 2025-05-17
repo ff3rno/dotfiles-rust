@@ -1,10 +1,13 @@
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use anyhow::{anyhow, Context, Result};
 use std::thread_local;
 use std::sync::Mutex;
 use std::sync::LazyLock;
+
+#[cfg(test)]
+use std::path::{Path};
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -90,6 +93,7 @@ pub fn get_backup_dir() -> Result<PathBuf> {
     Ok(backup_dir)
 }
 
+#[cfg(test)]
 pub fn ensure_parent_dirs(path: &Path, dry_run: bool) -> Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.exists() && !dry_run {
