@@ -36,6 +36,9 @@ fn main() -> Result<()> {
         },
         Args::ClearBackups { force } => {
             clear_backups(force)
+        },
+        Args::Status { verbose } => {
+            commands::status_dotfiles(verbose)
         }
     }
 } 

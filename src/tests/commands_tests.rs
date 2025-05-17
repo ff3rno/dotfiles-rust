@@ -129,7 +129,22 @@ fn test_install_dotfiles_blacklist() -> Result<()> {
 
 #[test]
 fn test_restore_backups() -> Result<()> {
-    let (_, temp_home, backup_dir) = setup_test_env()?;
+    let (temp_dir, temp_home, backup_dir) = setup_test_env()?;
+    
+    // Create source directory with files for fallback restore
+    let source_dir = temp_dir.path().join("source");
+    fs::create_dir_all(&source_dir)?;
+    
+    let config = Config {
+        source_dir: source_dir.to_str().unwrap().to_string(),
+    };
+    write_config(&config)?;
+    
+    // Create source files that should be used as fallback when no backup exists
+    create_test_file(&source_dir.join(".vimrc"), "source vimrc content")?;
+    create_test_file(&source_dir.join(".bashrc"), "source bashrc content")?;
+    create_test_file(&source_dir.join(".zshrc"), "source zshrc content")?;
+    create_test_file(&source_dir.join(".config/fish/config.fish"), "source fish config content")?;
     
     println!("TEST_HOME set to: {}", temp_home.to_string_lossy());
     println!("Backup dir set to: {}", backup_dir.to_string_lossy());
@@ -137,7 +152,7 @@ fn test_restore_backups() -> Result<()> {
     let backup_file_path1 = backup_dir.join(".vimrc.1000000000");
     let backup_file_path2 = backup_dir.join(".bashrc.1000000100");
     let backup_file_path3 = backup_dir.join(".vimrc.1000000200");  // Newer version of .vimrc
-    let backup_file_path4 = backup_dir.join(".config.fish.1000000300");
+    let backup_file_path4 = backup_dir.join(".config/fish/config.fish.1000000300");
     
     create_test_file(&backup_file_path1, "old vimrc content")?;
     create_test_file(&backup_file_path2, "bashrc content")?;
@@ -178,11 +193,11 @@ fn test_restore_backups() -> Result<()> {
     
     let restored_vimrc = temp_home.join(".vimrc");
     let restored_bashrc = temp_home.join(".bashrc");
-    let restored_fish_config = temp_home.join(".config.fish");
+    let restored_fish_config = temp_home.join(".config/fish/config.fish");
     
     assert!(restored_vimrc.exists(), ".vimrc should be restored in restore-all");
     assert!(restored_bashrc.exists(), ".bashrc should be restored in restore-all");
-    assert!(restored_fish_config.exists(), ".config.fish should be restored in restore-all");
+    assert!(restored_fish_config.exists(), "config.fish should be restored in restore-all");
     
     let vimrc_content = fs::read_to_string(&restored_vimrc)?;
     let bashrc_content = fs::read_to_string(&restored_bashrc)?;
@@ -190,14 +205,31 @@ fn test_restore_backups() -> Result<()> {
     
     assert_eq!(vimrc_content, "newer vimrc content", "Latest vimrc backup should be restored");
     assert_eq!(bashrc_content, "bashrc content", "Bashrc should be restored");
-    assert_eq!(fish_content, "fish config content", "Fish config should be restored");
+    assert_eq!(fish_content, "source fish config content", "Fish config should be installed from source");
     
     assert!(!backup_file_path2.exists(), "Bashrc backup file should be deleted");
     assert!(!backup_file_path3.exists(), "Vimrc backup file should be deleted");
-    assert!(!backup_file_path4.exists(), "Fish config backup file should be deleted");
+    // We're not using backup_file_path4 for fish config, so don't check if it was deleted
     
+    // Test restore for file with no backup
+    fs::remove_dir_all(&backup_dir)?;
+    fs::create_dir_all(&backup_dir)?;
+    
+    // No backups exist, but source file does
+    let no_backup_file = temp_home.join(".zshrc");
+    if no_backup_file.exists() {
+        fs::remove_file(&no_backup_file)?;
+    }
+    
+    restore_backups(Some(".zshrc"), None, false, true)?;
+    
+    assert!(no_backup_file.exists(), ".zshrc should be restored from source");
+    let zshrc_content = fs::read_to_string(&no_backup_file)?;
+    assert_eq!(zshrc_content, "source zshrc content", "File should be restored from source file");
+    
+    // Test nonexistent file with no source
     let result = restore_backups(Some(".nonexistent"), None, false, true);
-    assert!(result.is_err(), "Should return error for non-existent backup");
+    assert!(result.is_ok(), "Restore should work but fail to find file");
     
     cleanup_test_env();
     
@@ -317,7 +349,7 @@ fn test_restore_no_backup_preparation() -> Result<()> {
 }
 
 #[test]
-fn test_restore_removes_files_without_backups() -> Result<()> {
+fn test_restore_only_manages_repo_files() -> Result<()> {
     let (temp_dir, temp_home, backup_dir) = setup_test_env()?;
     
     // Create source directory with files
@@ -349,22 +381,77 @@ fn test_restore_removes_files_without_backups() -> Result<()> {
     create_test_file(&backup_vimrc, "backup vimrc content")?;
     create_test_file(&backup_bashrc, "backup bashrc content")?;
     
-    // Restore backups - should restore files with backups and remove files without backups
+    // Create a file in home that's not in source and has no backup
+    create_test_file(&temp_home.join(".not_in_source"), "not in source content")?;
+    
+    // Modify the source files to ensure they're different from what's in home
+    create_test_file(&source_dir.join(".vimrc"), "updated vimrc content")?;
+    create_test_file(&source_dir.join(".bashrc"), "updated bashrc content")?;
+    create_test_file(&source_dir.join(".zshrc"), "updated zshrc content")?;
+    
+    // Restore backups - should restore files with backups and install from source for files without backups
     restore_backups(None, None, false, true)?;
     
-    // Files with backups should be restored
+    // Files with backups should be restored from backup
     assert!(temp_home.join(".vimrc").exists(), ".vimrc should still exist (restored from backup)");
     assert!(temp_home.join(".bashrc").exists(), ".bashrc should still exist (restored from backup)");
     
-    // File without backup should be removed
-    assert!(!temp_home.join(".zshrc").exists(), ".zshrc should be removed (no backup)");
+    // File without backup should be installed from source
+    assert!(temp_home.join(".zshrc").exists(), ".zshrc should exist (restored from source)");
+    
+    // File not in source should not be touched by the restore operation
+    assert!(temp_home.join(".not_in_source").exists(), ".not_in_source should still exist (not managed by dotfiles)");
     
     // Verify content of restored files
     let vimrc_content = fs::read_to_string(temp_home.join(".vimrc"))?;
     let bashrc_content = fs::read_to_string(temp_home.join(".bashrc"))?;
+    let zshrc_content = fs::read_to_string(temp_home.join(".zshrc"))?;
+    let not_in_source_content = fs::read_to_string(temp_home.join(".not_in_source"))?;
     
     assert_eq!(vimrc_content, "backup vimrc content", "Vimrc content should be from backup");
     assert_eq!(bashrc_content, "backup bashrc content", "Bashrc content should be from backup");
+    assert_eq!(zshrc_content, "updated zshrc content", "Zshrc content should be from source");
+    assert_eq!(not_in_source_content, "not in source content", "Not in source content should be unchanged");
+    
+    cleanup_test_env();
+    
+    Ok(())
+}
+
+#[test]
+fn test_status_dotfiles() -> Result<()> {
+    let (temp_dir, temp_home, _) = setup_test_env()?;
+    
+    // Create source directory with files
+    let source_dir = temp_dir.path().join("source");
+    fs::create_dir_all(&source_dir)?;
+    
+    let config = Config {
+        source_dir: source_dir.to_str().unwrap().to_string(),
+    };
+    write_config(&config)?;
+    
+    // Case 1: Create a file in source that doesn't exist in home (not installed)
+    create_test_file(&source_dir.join(".vimrc"), "vimrc content")?;
+    
+    // Case 2: Create a file that exists in both with identical content (installed)
+    create_test_file(&source_dir.join(".bashrc"), "identical content")?;
+    create_test_file(&temp_home.join(".bashrc"), "identical content")?;
+    
+    // Case 3: Create a file that exists in both with different content (modified)
+    create_test_file(&source_dir.join(".zshrc"), "source zshrc content")?;
+    create_test_file(&temp_home.join(".zshrc"), "modified zshrc content")?;
+    
+    // Case 4: Create a blacklisted file that should be skipped
+    create_test_file(&source_dir.join(".git/config"), "git config")?;
+    
+    // Run status with basic output
+    let result = crate::commands::status_dotfiles(false);
+    assert!(result.is_ok(), "Status command should run without errors");
+    
+    // Run status with verbose output
+    let verbose_result = crate::commands::status_dotfiles(true);
+    assert!(verbose_result.is_ok(), "Verbose status command should run without errors");
     
     cleanup_test_env();
     

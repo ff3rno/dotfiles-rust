@@ -67,4 +67,11 @@ pub enum Args {
         #[arg(short, long)]
         force: bool,
     },
+
+    /// Show status of dotfiles
+    Status {
+        /// Display detailed file content differences
+        #[arg(short, long)]
+        verbose: bool,
+    },
 } 
